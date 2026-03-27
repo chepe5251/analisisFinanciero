@@ -1,0 +1,8 @@
+fecha,beneficiario,cuenta,importe,referencia
+2024-01-15,Juan Perez Torres,1234567890,1500.00,Pago nomina enero EMP001
+2024-01-15,María García López,0987654321,1250.00,Pago nomina enero EMP002
+2024-01-15,Carlos Lopez Mendoza,1122334455,1800.00,Pago nomina enero EMP003
+2024-01-15,Diana Castillo Rojas,5566778899,2250.00,Pago nomina enero EMP005
+2024-01-15,Fernando Rios Blanco,9900112233,1080.00,Pago nomina enero EMP006
+2024-01-15,Pedro Alvarado Soto,9988776655,750.00,Pago proveedor externo ref-8821
+2024-01-15,Proveedor Logistica SA,1357924680,1200.00,Factura 2024-0041 servicios

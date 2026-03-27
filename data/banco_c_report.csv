@@ -1,0 +1,10 @@
+fecha_transaccion,nombre,cuenta_destino,monto,descripcion
+2024-01-15,Miguel Flores Cano,5544332211,1750.00,Pago de salario enero EMP013
+2024-01-15,Carmen Jimenez Ortiz,2233445566,1050.00,Pago de salario enero EMP014
+2024-01-15,Sofia Mora Espinoza,4455667788,900.00,Pago de salario enero EMP016
+2024-01-15,Hector Ramirez Luna,6677889900,1600.00,Pago de salario enero EMP017
+2024-01-15,Patricia Lozano Avila,3322110099,2300.00,Pago de salario enero EMP018
+2024-01-15,Eduardo Bravo Reyes,7766554433,990.00,Pago de salario enero EMP019
+2024-01-15,Gabriela Fuentes,1133445566,1475.00,Pago de salario enero EMP020
+2024-01-15,Persona Desconocida Uno,9900112233,500.00,Transferencia no identificada TRF-001
+2024-01-15,Empresa Externa ABC,8811223344,3500.00,Pago por servicios contrato 2024

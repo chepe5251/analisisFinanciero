@@ -1,0 +1,50 @@
+# ─── Python / Backend ───────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+*.log
+*.sqlite
+*.db
+
+# Uploaded files (never commit user data)
+uploads/
+backend/uploads/
+
+# ─── Node / Frontend ─────────────────────────────────────────────────
+node_modules/
+.next/
+out/
+.cache/
+*.tsbuildinfo
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+# ─── Testing ─────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+coverage/
+
+# ─── IDE / OS ────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── Docker ──────────────────────────────────────────────────────────
+*.override.yml
