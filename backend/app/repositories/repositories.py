@@ -9,6 +9,7 @@ from typing import List, Optional, Dict, Any, Tuple
 from app.models.models import (
     Upload, EmployeeTemplate, BankTransaction,
     ReconciliationResult, ReconciliationBatch,
+    User, AuditLog,
 )
 from app.schemas.schemas import (
     UploadCreate, EmployeeTemplateCreate,
@@ -292,4 +293,96 @@ class ReconciliationBatchRepository:
             self.db.query(ReconciliationBatch)
             .order_by(ReconciliationBatch.created_at.desc())
             .first()
+        )
+
+
+# ---------------------------------------------------------------------------
+# User Repository
+# ---------------------------------------------------------------------------
+
+class UserRepository:
+    def __init__(self, db: Session):
+        self.db = db
+
+    def count(self) -> int:
+        return self.db.query(User).count()
+
+    def get_by_id(self, user_id: int) -> Optional[User]:
+        return self.db.query(User).filter(User.id == user_id).first()
+
+    def get_by_username(self, username: str) -> Optional[User]:
+        return self.db.query(User).filter(User.username == username).first()
+
+    def get_by_email(self, email: str) -> Optional[User]:
+        return self.db.query(User).filter(User.email == email).first()
+
+    def get_by_credential(self, credential: str) -> Optional[User]:
+        """Busca por username o email."""
+        return (
+            self.db.query(User)
+            .filter((User.username == credential) | (User.email == credential))
+            .first()
+        )
+
+    def get_all(self) -> List[User]:
+        return self.db.query(User).order_by(User.created_at.desc()).all()
+
+    def create(self, **kwargs) -> User:
+        user = User(**kwargs)
+        self.db.add(user)
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+
+    def update(self, user: User, **kwargs) -> User:
+        for field, value in kwargs.items():
+            if value is not None:
+                setattr(user, field, value)
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+
+    def set_last_login(self, user: User) -> None:
+        from datetime import datetime
+        user.last_login_at = datetime.utcnow()
+        self.db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Audit Log Repository
+# ---------------------------------------------------------------------------
+
+class AuditLogRepository:
+    def __init__(self, db: Session):
+        self.db = db
+
+    def log(
+        self,
+        action: str,
+        user_id: Optional[int] = None,
+        username: Optional[str] = None,
+        resource_type: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        detail: Optional[str] = None,
+        ip_address: Optional[str] = None,
+    ) -> AuditLog:
+        entry = AuditLog(
+            user_id=user_id,
+            username=username,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            detail=detail,
+            ip_address=ip_address,
+        )
+        self.db.add(entry)
+        self.db.commit()
+        return entry
+
+    def get_all(self, limit: int = 200) -> List[AuditLog]:
+        return (
+            self.db.query(AuditLog)
+            .order_by(AuditLog.created_at.desc())
+            .limit(limit)
+            .all()
         )

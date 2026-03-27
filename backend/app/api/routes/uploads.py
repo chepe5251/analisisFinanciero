@@ -7,13 +7,15 @@ import uuid
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Query
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.config import settings
+from app.core.dependencies import require_roles
 from app.schemas.schemas import UploadOut, UploadResponse, UploadCreate
-from app.repositories.repositories import UploadRepository
+from app.repositories.repositories import UploadRepository, AuditLogRepository
+from app.models.models import User
 from app.services.reconciliation_service import ReconciliationService
 
 logger = logging.getLogger(__name__)
@@ -76,9 +78,15 @@ def _save_to_disk(original_filename: str, content: bytes) -> str:
 # Endpoints
 # ---------------------------------------------------------------------------
 
+_op_admin = require_roles("admin", "operator")
+_any_role = require_roles("admin", "operator", "viewer")
+
+
 @router.post("/template", response_model=UploadResponse, summary="Subir plantilla de personal")
 async def upload_template(
+    request: Request,
     file: UploadFile = File(..., description="Archivo CSV o Excel con la plantilla de personal"),
+    current_user: User = Depends(_op_admin),
     db: Session = Depends(get_db),
 ):
     """
@@ -117,16 +125,27 @@ async def upload_template(
         raise HTTPException(status_code=500, detail=f"Error procesando plantilla: {e}")
 
     db.refresh(upload)
+    AuditLogRepository(db).log(
+        action="upload.template",
+        user_id=current_user.id,
+        username=current_user.username,
+        resource_type="upload",
+        resource_id=str(upload.id),
+        detail=f"'{upload.file_name}' — {message}",
+        ip_address=request.client.host if request.client else None,
+    )
     return UploadResponse(upload=UploadOut.model_validate(upload), message=message)
 
 
 @router.post("/bank-report", response_model=UploadResponse, summary="Subir reporte bancario")
 async def upload_bank_report(
+    request: Request,
     file: UploadFile = File(..., description="Archivo CSV o Excel del banco"),
     bank_name: str = Form(
         ...,
         description="Nombre del banco (ej: Banco_A). Debe coincidir con el formato del archivo.",
     ),
+    current_user: User = Depends(_op_admin),
     db: Session = Depends(get_db),
 ):
     """
@@ -170,6 +189,15 @@ async def upload_bank_report(
         raise HTTPException(status_code=500, detail=f"Error procesando reporte bancario: {e}")
 
     db.refresh(upload)
+    AuditLogRepository(db).log(
+        action="upload.bank_report",
+        user_id=current_user.id,
+        username=current_user.username,
+        resource_type="upload",
+        resource_id=str(upload.id),
+        detail=f"'{upload.file_name}' banco={bank_name} — {message}",
+        ip_address=request.client.host if request.client else None,
+    )
     return UploadResponse(
         upload=UploadOut.model_validate(upload),
         message=message,
@@ -181,6 +209,7 @@ def list_uploads(
     file_type: Optional[str] = Query(
         None, description="Filtrar por tipo: template | bank_report"
     ),
+    current_user: User = Depends(_any_role),
     db: Session = Depends(get_db),
 ):
     """Retorna todos los archivos subidos, ordenados por fecha descendente."""
@@ -189,7 +218,10 @@ def list_uploads(
 
 
 @router.get("/stats/overview", summary="Resumen rápido de uploads para el dashboard")
-def get_upload_stats(db: Session = Depends(get_db)):
+def get_upload_stats(
+    current_user: User = Depends(_any_role),
+    db: Session = Depends(get_db),
+):
     """
     Retorna conteos de uploads por tipo y estado.
     Usado por el dashboard para mostrar si hay datos disponibles.
@@ -211,7 +243,11 @@ def get_upload_stats(db: Session = Depends(get_db)):
 
 
 @router.get("/{upload_id}", response_model=UploadOut, summary="Detalle de un archivo")
-def get_upload(upload_id: int, db: Session = Depends(get_db)):
+def get_upload(
+    upload_id: int,
+    current_user: User = Depends(_any_role),
+    db: Session = Depends(get_db),
+):
     repo = UploadRepository(db)
     record = repo.get_by_id(upload_id)
     if not record:

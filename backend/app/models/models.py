@@ -2,7 +2,7 @@
 Modelos SQLAlchemy.
 Todos importan Base desde core.database para garantizar un único metadata.
 """
-from sqlalchemy import Column, Integer, String, DateTime, Float, Text, ForeignKey, JSON
+from sqlalchemy import Column, Integer, String, DateTime, Float, Text, ForeignKey, JSON, Boolean
 from sqlalchemy.orm import relationship
 from datetime import datetime
 
@@ -128,3 +128,48 @@ class ReconciliationBatch(Base):
     status = Column(String(50), default="completed")
     total_results = Column(Integer, default=0)
     notes = Column(Text, nullable=True)
+
+
+# ---------------------------------------------------------------------------
+# Autenticación y autorización
+# ---------------------------------------------------------------------------
+
+class User(Base):
+    """
+    Usuario del sistema.
+    Roles: admin | operator | viewer
+    """
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(50), unique=True, nullable=False, index=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    hashed_password = Column(String(255), nullable=False)
+    full_name = Column(String(200), nullable=True)
+    role = Column(String(20), nullable=False)            # admin | operator | viewer
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_login_at = Column(DateTime, nullable=True)
+
+    audit_logs = relationship("AuditLog", back_populates="user", foreign_keys="AuditLog.user_id")
+
+
+class AuditLog(Base):
+    """
+    Registro de auditoría de acciones relevantes del sistema.
+    username se desnormaliza para preservar el log si el usuario se elimina.
+    """
+    __tablename__ = "audit_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    username = Column(String(50), nullable=True)        # desnormalizado
+    action = Column(String(100), nullable=False, index=True)   # user.login, upload.template, etc.
+    resource_type = Column(String(50), nullable=True)   # upload | reconciliation | user
+    resource_id = Column(String(50), nullable=True)
+    detail = Column(Text, nullable=True)
+    ip_address = Column(String(45), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    user = relationship("User", back_populates="audit_logs", foreign_keys=[user_id])

@@ -7,13 +7,21 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.dependencies import require_roles
+from app.models.models import User
 from app.services.report_service import ReportService
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
+# Todos los roles pueden descargar reportes
+_any_role = require_roles("admin", "operator", "viewer")
+
 
 @router.get("/consolidated", summary="Reporte consolidado (CSV)")
-def download_consolidated_csv(db: Session = Depends(get_db)):
+def download_consolidated_csv(
+    current_user: User = Depends(_any_role),
+    db: Session = Depends(get_db),
+):
     """Descarga CSV con todos los resultados de la conciliación."""
     try:
         service = ReportService(db)
@@ -28,7 +36,10 @@ def download_consolidated_csv(db: Session = Depends(get_db)):
 
 
 @router.get("/inconsistencies", summary="Reporte de inconsistencias (CSV)")
-def download_inconsistencies_csv(db: Session = Depends(get_db)):
+def download_inconsistencies_csv(
+    current_user: User = Depends(_any_role),
+    db: Session = Depends(get_db),
+):
     """Descarga CSV con registros que requieren revisión."""
     try:
         service = ReportService(db)
@@ -43,7 +54,10 @@ def download_inconsistencies_csv(db: Session = Depends(get_db)):
 
 
 @router.get("/missing", summary="Reporte de faltantes (CSV)")
-def download_missing_csv(db: Session = Depends(get_db)):
+def download_missing_csv(
+    current_user: User = Depends(_any_role),
+    db: Session = Depends(get_db),
+):
     """Descarga CSV con empleados sin transacción bancaria."""
     try:
         service = ReportService(db)
@@ -58,7 +72,10 @@ def download_missing_csv(db: Session = Depends(get_db)):
 
 
 @router.get("/extras", summary="Reporte de sobrantes (CSV)")
-def download_extras_csv(db: Session = Depends(get_db)):
+def download_extras_csv(
+    current_user: User = Depends(_any_role),
+    db: Session = Depends(get_db),
+):
     """Descarga CSV con transacciones sin empleado en plantilla."""
     try:
         service = ReportService(db)
@@ -73,7 +90,10 @@ def download_extras_csv(db: Session = Depends(get_db)):
 
 
 @router.get("/consolidated-excel", summary="Reporte consolidado completo (Excel)")
-def download_consolidated_excel(db: Session = Depends(get_db)):
+def download_consolidated_excel(
+    current_user: User = Depends(_any_role),
+    db: Session = Depends(get_db),
+):
     """
     Descarga Excel con múltiples hojas:
     Resumen, Todos, Inconsistencias, Faltantes, Sobrantes.

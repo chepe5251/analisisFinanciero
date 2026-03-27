@@ -13,6 +13,10 @@ import type {
   ReconciliationRunRequest,
   ReconciliationRunResponse,
   ResultFilters,
+  UserProfile,
+  UserCreate,
+  UserUpdate,
+  AuditLog,
 } from "./types";
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL
@@ -24,15 +28,28 @@ const client = axios.create({
   timeout: 30_000,
 });
 
-// Interceptor para loggear errores en desarrollo
+// Adjunta el JWT a todas las peticiones
+client.interceptors.request.use((config) => {
+  if (typeof window !== "undefined") {
+    const token = localStorage.getItem("auth_token");
+    if (token) config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// Manejo de errores: extrae detail de FastAPI y redirige en 401
 client.interceptors.response.use(
   (res) => res,
   (err) => {
+    if (err.response?.status === 401 && typeof window !== "undefined") {
+      localStorage.removeItem("auth_token");
+      document.cookie = "auth_token=; path=/; max-age=0";
+      window.location.href = "/login";
+      return Promise.reject(new Error("Sesión expirada."));
+    }
     const detail = err.response?.data?.detail;
     const message = detail
-      ? typeof detail === "string"
-        ? detail
-        : JSON.stringify(detail)
+      ? typeof detail === "string" ? detail : JSON.stringify(detail)
       : err.message;
     return Promise.reject(new Error(message));
   }
@@ -152,3 +169,37 @@ export const REPORT_ENDPOINTS = {
   extras: { url: "/reports/extras", filename: "sobrantes.csv" },
   excel: { url: "/reports/consolidated-excel", filename: "conciliacion_completa.xlsx" },
 } as const;
+
+// ---------------------------------------------------------------------------
+// Users (admin only)
+// ---------------------------------------------------------------------------
+
+export async function fetchUsers(): Promise<UserProfile[]> {
+  const { data } = await client.get<UserProfile[]>("/users");
+  return data;
+}
+
+export async function createUser(payload: UserCreate): Promise<UserProfile> {
+  const { data } = await client.post<UserProfile>("/users", payload);
+  return data;
+}
+
+export async function updateUser(id: number, payload: UserUpdate): Promise<UserProfile> {
+  const { data } = await client.put<UserProfile>(`/users/${id}`, payload);
+  return data;
+}
+
+export async function deactivateUser(id: number): Promise<UserProfile> {
+  const { data } = await client.patch<UserProfile>(`/users/${id}/deactivate`);
+  return data;
+}
+
+export async function activateUser(id: number): Promise<UserProfile> {
+  const { data } = await client.patch<UserProfile>(`/users/${id}/activate`);
+  return data;
+}
+
+export async function fetchAuditLog(): Promise<AuditLog[]> {
+  const { data } = await client.get<AuditLog[]>("/audit");
+  return data;
+}

@@ -1,35 +1,64 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
-  LayoutDashboard,
-  Upload,
-  History,
-  CheckSquare,
-  AlertTriangle,
-  Download,
+  LayoutDashboard, Upload, History, CheckSquare,
+  AlertTriangle, Download, Users, LogOut, ShieldCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuth, hasRole } from "@/lib/auth";
+import type { UserRole } from "@/lib/types";
 
-const nav = [
-  { label: "Dashboard",       href: "/",                icon: LayoutDashboard },
-  { label: "Cargar Archivos", href: "/uploads",         icon: Upload          },
-  { label: "Historial",       href: "/history",         icon: History         },
-  { label: "Conciliación",    href: "/reconciliation",  icon: CheckSquare     },
-  { label: "Inconsistencias", href: "/inconsistencies", icon: AlertTriangle   },
-  { label: "Reportes",        href: "/reports",         icon: Download        },
+interface NavItem {
+  label: string;
+  href: string;
+  icon: typeof LayoutDashboard;
+  roles: UserRole[];   // roles que pueden ver este ítem
+}
+
+const NAV: NavItem[] = [
+  { label: "Dashboard",       href: "/",                icon: LayoutDashboard, roles: ["admin", "operator", "viewer"] },
+  { label: "Cargar Archivos", href: "/uploads",         icon: Upload,          roles: ["admin", "operator"] },
+  { label: "Historial",       href: "/history",         icon: History,         roles: ["admin", "operator", "viewer"] },
+  { label: "Conciliación",    href: "/reconciliation",  icon: CheckSquare,     roles: ["admin", "operator"] },
+  { label: "Inconsistencias", href: "/inconsistencies", icon: AlertTriangle,   roles: ["admin", "operator", "viewer"] },
+  { label: "Reportes",        href: "/reports",         icon: Download,        roles: ["admin", "operator", "viewer"] },
+  { label: "Usuarios",        href: "/users",           icon: Users,           roles: ["admin"] },
 ];
+
+const ROLE_LABEL: Record<UserRole, string> = {
+  admin:    "Administrador",
+  operator: "Operador",
+  viewer:   "Auditor",
+};
+
+const ROLE_COLOR: Record<UserRole, string> = {
+  admin:    "bg-purple-100 text-purple-700",
+  operator: "bg-blue-100 text-blue-700",
+  viewer:   "bg-gray-100 text-gray-600",
+};
 
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const { user, logout } = useAuth();
+
+  function handleLogout() {
+    logout();
+    router.push("/login");
+  }
+
+  const visibleNav = NAV.filter((item) =>
+    user ? hasRole(user, ...item.roles) : false
+  );
 
   return (
     <aside className="flex h-screen w-60 flex-col border-r border-gray-200 bg-white">
       {/* Logo */}
       <div className="flex h-16 items-center gap-3 border-b border-gray-200 px-5">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600">
-          <CheckSquare className="h-4 w-4 text-white" />
+          <ShieldCheck className="h-4 w-4 text-white" />
         </div>
         <div>
           <p className="text-sm font-bold text-gray-900">ReconcilaApp</p>
@@ -40,7 +69,7 @@ export function Sidebar() {
       {/* Navegación */}
       <nav className="flex-1 overflow-y-auto px-3 py-4">
         <ul className="space-y-1">
-          {nav.map(({ label, href, icon: Icon }) => {
+          {visibleNav.map(({ label, href, icon: Icon }) => {
             const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
             return (
               <li key={href}>
@@ -62,10 +91,33 @@ export function Sidebar() {
         </ul>
       </nav>
 
-      {/* Footer */}
-      <div className="border-t border-gray-200 px-5 py-3">
-        <p className="text-xs text-gray-400">v1.0.0 — Demo local</p>
-      </div>
+      {/* Usuario + logout */}
+      {user && (
+        <div className="border-t border-gray-200 px-4 py-3 space-y-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-bold text-gray-600 uppercase">
+              {user.username[0]}
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-gray-800 truncate">{user.full_name || user.username}</p>
+              <p className="text-xs text-gray-400 truncate">{user.email}</p>
+            </div>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className={cn("text-xs font-medium px-2 py-0.5 rounded-full", ROLE_COLOR[user.role])}>
+              {ROLE_LABEL[user.role]}
+            </span>
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-1 text-xs text-gray-400 hover:text-red-600 transition-colors"
+              title="Cerrar sesión"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              Salir
+            </button>
+          </div>
+        </div>
+      )}
     </aside>
   );
 }

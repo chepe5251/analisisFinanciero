@@ -10,24 +10,31 @@ GET  /inconsistencies →  solo registros que requieren revisión
 import logging
 from typing import Optional, List
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.dependencies import require_roles
+from app.models.models import User
 from app.schemas.schemas import (
     ReconciliationRunRequest, ReconciliationRunResponse,
     ReconciliationSummary, BankSummary, PaginatedResults, ReconciliationResultOut,
 )
-from app.repositories.repositories import ReconciliationResultRepository
+from app.repositories.repositories import ReconciliationResultRepository, AuditLogRepository
 from app.services.reconciliation_service import ReconciliationService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/reconciliation", tags=["reconciliation"])
 
+_op_admin = require_roles("admin", "operator")
+_any_role = require_roles("admin", "operator", "viewer")
+
 
 @router.post("/run", response_model=ReconciliationRunResponse, summary="Ejecutar conciliación")
 def run_reconciliation(
-    request: ReconciliationRunRequest,
+    body: ReconciliationRunRequest,
+    request: Request,
+    current_user: User = Depends(_op_admin),
     db: Session = Depends(get_db),
 ):
     """
@@ -40,7 +47,19 @@ def run_reconciliation(
     """
     service = ReconciliationService(db)
     try:
-        result = service.run_reconciliation(request)
+        result = service.run_reconciliation(body)
+        AuditLogRepository(db).log(
+            action="reconciliation.run",
+            user_id=current_user.id,
+            username=current_user.username,
+            resource_type="reconciliation",
+            resource_id=str(result.batch_id),
+            detail=(
+                f"template_id={body.template_upload_id} banks={body.bank_upload_ids} "
+                f"total={result.summary.total_processed} matched={result.summary.total_matched}"
+            ),
+            ip_address=request.client.host if request.client else None,
+        )
         return ReconciliationRunResponse(
             summary=result.summary,
             message="Conciliación completada exitosamente",
@@ -54,7 +73,10 @@ def run_reconciliation(
 
 
 @router.get("/summary", response_model=ReconciliationSummary, summary="KPIs del dashboard")
-def get_summary(db: Session = Depends(get_db)):
+def get_summary(
+    current_user: User = Depends(_any_role),
+    db: Session = Depends(get_db),
+):
     """Retorna los indicadores agregados de la última corrida de conciliación."""
     repo = ReconciliationResultRepository(db)
     data = repo.get_summary()
@@ -62,7 +84,10 @@ def get_summary(db: Session = Depends(get_db)):
 
 
 @router.get("/bank-summary", response_model=List[BankSummary], summary="Resumen por banco")
-def get_bank_summary(db: Session = Depends(get_db)):
+def get_bank_summary(
+    current_user: User = Depends(_any_role),
+    db: Session = Depends(get_db),
+):
     """Retorna el conteo de transacciones agrupado por banco."""
     repo = ReconciliationResultRepository(db)
     return repo.get_bank_summary()
@@ -84,6 +109,7 @@ def get_results(
     max_amount: Optional[float] = Query(None, description="Monto máximo"),
     page: int = Query(1, ge=1, description="Página (empieza en 1)"),
     page_size: int = Query(50, ge=1, le=200, description="Resultados por página"),
+    current_user: User = Depends(_any_role),
     db: Session = Depends(get_db),
 ):
     """Retorna resultados de la conciliación con filtros y paginación."""
@@ -113,7 +139,10 @@ def get_results(
     response_model=List[ReconciliationResultOut],
     summary="Solo inconsistencias",
 )
-def get_inconsistencies(db: Session = Depends(get_db)):
+def get_inconsistencies(
+    current_user: User = Depends(_any_role),
+    db: Session = Depends(get_db),
+):
     """
     Retorna únicamente los registros que requieren revisión del operador:
     difference, missing, extra, duplicate, pending.

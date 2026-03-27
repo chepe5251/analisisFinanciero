@@ -6,6 +6,7 @@ Supuesto: si no existe .env, se usan los valores por defecto (desarrollo local).
 from pydantic_settings import BaseSettings
 from typing import List
 import os
+import secrets
 
 
 class Settings(BaseSettings):
@@ -25,12 +26,21 @@ class Settings(BaseSettings):
     CORS_ORIGINS: List[str] = ["http://localhost:3000"]
 
     # Tolerancia de diferencia de monto para considerar un match exacto
-    # (ej: 0.01 = diferencias de hasta 1 centavo se consideran iguales)
     AMOUNT_TOLERANCE: float = 0.01
 
-    # Umbral de similitud de nombre (0.0 a 1.0) para match por nombre aproximado
-    # Supuesto: nombres con 80% de similitud se consideran candidatos
+    # Umbral de similitud de nombre (0.0 a 1.0)
     NAME_SIMILARITY_THRESHOLD: float = 0.80
+
+    # ── Autenticación ──────────────────────────────────────────────────
+    # Clave secreta para firmar los JWT. En producción, usa una clave larga y aleatoria.
+    SECRET_KEY: str = secrets.token_hex(32)
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_HOURS: int = 8
+
+    # Credenciales del administrador por defecto (solo se crean si no hay usuarios)
+    DEFAULT_ADMIN_USERNAME: str = "admin"
+    DEFAULT_ADMIN_EMAIL: str = "admin@reconcilaapp.local"
+    DEFAULT_ADMIN_PASSWORD: str = "Admin1234!"
 
     class Config:
         env_file = ".env"

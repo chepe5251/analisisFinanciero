@@ -208,3 +208,74 @@ class ReconciliationRunResponse(BaseModel):
     summary: ReconciliationSummary
     message: str
     batch_id: Optional[int] = None
+
+
+# ---------------------------------------------------------------------------
+# Auth / Usuario schemas
+# ---------------------------------------------------------------------------
+
+VALID_ROLES = {"admin", "operator", "viewer"}
+
+
+class UserCreate(BaseModel):
+    username: str
+    email: str
+    password: str
+    full_name: Optional[str] = None
+    role: str = "operator"
+
+    @property
+    def validated_role(self) -> str:
+        if self.role not in VALID_ROLES:
+            raise ValueError(f"Rol inválido. Opciones: {', '.join(VALID_ROLES)}")
+        return self.role
+
+
+class UserUpdate(BaseModel):
+    email: Optional[str] = None
+    full_name: Optional[str] = None
+    role: Optional[str] = None
+    password: Optional[str] = None      # None = no cambiar la contraseña
+
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    email: str
+    full_name: Optional[str] = None
+    role: str
+    is_active: bool
+    created_at: datetime
+    last_login_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class LoginRequest(BaseModel):
+    """Acepta username o email en el campo 'credential'."""
+    credential: str     # username o email
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserOut
+
+
+# ---------------------------------------------------------------------------
+# Auditoría schemas
+# ---------------------------------------------------------------------------
+
+class AuditLogOut(BaseModel):
+    id: int
+    user_id: Optional[int] = None
+    username: Optional[str] = None
+    action: str
+    resource_type: Optional[str] = None
+    resource_id: Optional[str] = None
+    detail: Optional[str] = None
+    ip_address: Optional[str] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

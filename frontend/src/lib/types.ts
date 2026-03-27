@@ -93,3 +93,51 @@ export interface ResultFilters {
   page: number;
   page_size: number;
 }
+
+// ─── Auth / Usuarios ────────────────────────────────────────────────────────
+
+export type UserRole = "admin" | "operator" | "viewer";
+
+export interface UserProfile {
+  id: number;
+  username: string;
+  email: string;
+  full_name: string | null;
+  role: UserRole;
+  is_active: boolean;
+  created_at: string;
+  last_login_at: string | null;
+}
+
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  user: UserProfile;
+}
+
+export interface UserCreate {
+  username: string;
+  email: string;
+  password: string;
+  full_name?: string;
+  role: UserRole;
+}
+
+export interface UserUpdate {
+  email?: string;
+  full_name?: string;
+  role?: UserRole;
+  password?: string;
+}
+
+export interface AuditLog {
+  id: number;
+  user_id: number | null;
+  username: string | null;
+  action: string;
+  resource_type: string | null;
+  resource_id: string | null;
+  detail: string | null;
+  ip_address: string | null;
+  created_at: string;
+}
