@@ -1,36 +1,50 @@
 version: "3.9"
 
+# Carga variables desde .env en la raíz del proyecto
+# Crea .env copiando .env.example y completando los valores
+
 services:
-  # -----------------------------------------------------------------------
-  # Base de datos PostgreSQL
-  # -----------------------------------------------------------------------
+  # ── Base de datos PostgreSQL ────────────────────────────────────────────────
   db:
     image: postgres:15-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: reconciliation_db
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
+      POSTGRES_DB: ${POSTGRES_DB:-reconciliation_db}
+      POSTGRES_USER: ${POSTGRES_USER:-reconcilaapp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U user -d reconciliation_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-reconcilaapp} -d ${POSTGRES_DB:-reconciliation_db}"]
       interval: 5s
       timeout: 5s
       retries: 10
 
-  # -----------------------------------------------------------------------
-  # Backend FastAPI
-  # -----------------------------------------------------------------------
+  # ── Redis (broker para Celery) ─────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Backend FastAPI ────────────────────────────────────────────────────────
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      DATABASE_URL: postgresql://user:password@db/reconciliation_db
+      DATABASE_URL: ${DATABASE_URL:-postgresql://reconcilaapp:change_me@db/reconciliation_db}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       UPLOAD_DIR: /app/uploads
       CORS_ORIGINS: '["http://localhost:3000"]'
     ports:
@@ -38,15 +52,37 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - uploads_data:/app/uploads
-      # Montar código para desarrollo con reload
       - ./backend:/app
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: >
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
-  # -----------------------------------------------------------------------
-  # Frontend Next.js
-  # -----------------------------------------------------------------------
+  # ── Celery Worker ─────────────────────────────────────────────────────────
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://reconcilaapp:change_me@db/reconciliation_db}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      UPLOAD_DIR: /app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - uploads_data:/app/uploads
+      - ./backend:/app
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=2
+
+  # ── Frontend Next.js ──────────────────────────────────────────────────────
   frontend:
     build:
       context: ./frontend

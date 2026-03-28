@@ -165,6 +165,9 @@ class FileProcessor:
         1. Convierte a minúsculas y elimina espacios.
         2. Aplica el mapeo específico provisto.
         3. Si use_generic_fallback=True, aplica GENERIC_ALIASES para las que no mapearon.
+
+        BUG FIX: el fallback genérico verifica si el destino ya existe (no si la clave existe,
+        que siempre sería False después del rename).
         """
         result = df.copy()
         # Normalizar nombres actuales
@@ -175,10 +178,11 @@ class FileProcessor:
 
         # Fallback genérico para columnas aún no mapeadas
         if use_generic_fallback:
+            already_mapped = set(result.columns)
             remaining = {
                 col: GENERIC_ALIASES[col]
                 for col in result.columns
-                if col in GENERIC_ALIASES and col not in result.columns
+                if col in GENERIC_ALIASES and GENERIC_ALIASES[col] not in already_mapped
             }
             if remaining:
                 result = result.rename(columns=remaining)
@@ -266,17 +270,25 @@ class FileProcessor:
     @staticmethod
     def name_similarity(name_a: str, name_b: str) -> float:
         """
-        Calcula similitud simple entre dos nombres normalizados.
-        Usa intersección de tokens (palabras) sobre la unión.
-        Supuesto: orden de palabras no importa ('Juan Pérez' ≈ 'Pérez Juan').
+        Calcula similitud entre dos nombres normalizados.
+
+        BUG FIX: reemplaza Jaccard de tokens (frágil con apellidos compuestos)
+        por rapidfuzz.fuzz.token_sort_ratio, que maneja reordenamiento de tokens
+        y es más robusto con apellidos compuestos en español.
+        Fallback a difflib.SequenceMatcher si rapidfuzz no está instalado.
         """
-        tokens_a = set(FileProcessor.normalize_name(name_a).split())
-        tokens_b = set(FileProcessor.normalize_name(name_b).split())
-        if not tokens_a or not tokens_b:
+        a = FileProcessor.normalize_name(name_a)
+        b = FileProcessor.normalize_name(name_b)
+        if not a or not b:
             return 0.0
-        intersection = tokens_a & tokens_b
-        union = tokens_a | tokens_b
-        return len(intersection) / len(union)
+        try:
+            from rapidfuzz import fuzz
+            return fuzz.token_sort_ratio(a, b) / 100.0
+        except ImportError:
+            from difflib import SequenceMatcher
+            tokens_a = " ".join(sorted(a.split()))
+            tokens_b = " ".join(sorted(b.split()))
+            return SequenceMatcher(None, tokens_a, tokens_b).ratio()
 
     @staticmethod
     def validate_required_columns(df: pd.DataFrame, required: List[str]) -> List[str]:

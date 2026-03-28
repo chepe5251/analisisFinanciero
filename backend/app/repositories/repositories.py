@@ -5,11 +5,15 @@ Los servicios usan repositorios; los endpoints no acceden al ORM directamente.
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 from typing import List, Optional, Dict, Any, Tuple
+from datetime import datetime
 
 from app.models.models import (
     Upload, EmployeeTemplate, BankTransaction,
     ReconciliationResult, ReconciliationBatch,
     User, AuditLog,
+    Company, FiscalPeriod, CostCenter,
+    ChartOfAccount, JournalEntry, JournalEntryLine,
+    Budget, BudgetLine, Invoice, InvoiceLine, Payment,
 )
 from app.schemas.schemas import (
     UploadCreate, EmployeeTemplateCreate,
@@ -132,11 +136,6 @@ class ReconciliationResultRepository:
             self.db.refresh(r)
         return records
 
-    def delete_all(self) -> None:
-        """Limpia resultados anteriores antes de una nueva corrida."""
-        self.db.query(ReconciliationResult).delete()
-        self.db.commit()
-
     def get_all(self) -> List[ReconciliationResult]:
         return self.db.query(ReconciliationResult).order_by(ReconciliationResult.id).all()
 
@@ -147,12 +146,15 @@ class ReconciliationResultRepository:
         employee_name: Optional[str] = None,
         min_amount: Optional[float] = None,
         max_amount: Optional[float] = None,
+        batch_id: Optional[int] = None,
         offset: int = 0,
         limit: int = 50,
     ) -> Tuple[List[ReconciliationResult], int]:
-        """Retorna (registros, total) con filtros aplicados."""
+        """Retorna (registros, total) con filtros aplicados, opcionalmente por batch."""
         q = self.db.query(ReconciliationResult)
 
+        if batch_id is not None:
+            q = q.filter(ReconciliationResult.batch_id == batch_id)
         if status:
             q = q.filter(ReconciliationResult.reconciliation_status == status)
         if bank_name:
@@ -178,32 +180,34 @@ class ReconciliationResultRepository:
         items = q.order_by(ReconciliationResult.id).offset(offset).limit(limit).all()
         return items, total
 
-    def get_inconsistencies(self) -> List[ReconciliationResult]:
-        """Registros que requieren atención del operador."""
-        return (
+    def get_inconsistencies(self, batch_id: Optional[int] = None) -> List[ReconciliationResult]:
+        q = (
             self.db.query(ReconciliationResult)
             .filter(
                 ReconciliationResult.reconciliation_status.in_(
                     ["difference", "missing", "extra", "duplicate", "pending"]
                 )
             )
-            .order_by(ReconciliationResult.reconciliation_status, ReconciliationResult.id)
-            .all()
         )
+        if batch_id is not None:
+            q = q.filter(ReconciliationResult.batch_id == batch_id)
+        return q.order_by(ReconciliationResult.reconciliation_status, ReconciliationResult.id).all()
 
-    def get_summary(self) -> Dict[str, Any]:
-        """Agrega los KPIs del dashboard en una sola consulta."""
-        rows = (
-            self.db.query(
-                ReconciliationResult.reconciliation_status,
-                func.count(ReconciliationResult.id).label("count"),
-                func.coalesce(func.sum(ReconciliationResult.expected_amount), 0).label("expected"),
-                func.coalesce(func.sum(ReconciliationResult.reported_amount), 0).label("reported"),
-                func.coalesce(func.sum(ReconciliationResult.difference_amount), 0).label("diff"),
-            )
-            .group_by(ReconciliationResult.reconciliation_status)
-            .all()
+    def get_summary(self, batch_id: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Agrega los KPIs del dashboard.
+        BUG FIX: acepta batch_id para filtrar por corrida específica.
+        """
+        q = self.db.query(
+            ReconciliationResult.reconciliation_status,
+            func.count(ReconciliationResult.id).label("count"),
+            func.coalesce(func.sum(ReconciliationResult.expected_amount), 0).label("expected"),
+            func.coalesce(func.sum(ReconciliationResult.reported_amount), 0).label("reported"),
+            func.coalesce(func.sum(ReconciliationResult.difference_amount), 0).label("diff"),
         )
+        if batch_id is not None:
+            q = q.filter(ReconciliationResult.batch_id == batch_id)
+        rows = q.group_by(ReconciliationResult.reconciliation_status).all()
 
         summary: Dict[str, Any] = {
             "total_processed": 0,
@@ -232,9 +236,8 @@ class ReconciliationResultRepository:
 
         return summary
 
-    def get_bank_summary(self) -> List[Dict[str, Any]]:
-        """Resumen por banco para el dashboard."""
-        rows = (
+    def get_bank_summary(self, batch_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        q = (
             self.db.query(
                 ReconciliationResult.bank_name,
                 ReconciliationResult.reconciliation_status,
@@ -242,11 +245,13 @@ class ReconciliationResultRepository:
                 func.coalesce(func.sum(ReconciliationResult.reported_amount), 0).label("amount"),
             )
             .filter(ReconciliationResult.bank_name.isnot(None))
-            .group_by(ReconciliationResult.bank_name, ReconciliationResult.reconciliation_status)
-            .all()
         )
+        if batch_id is not None:
+            q = q.filter(ReconciliationResult.batch_id == batch_id)
+        rows = q.group_by(
+            ReconciliationResult.bank_name, ReconciliationResult.reconciliation_status
+        ).all()
 
-        # Agrupar por banco
         by_bank: Dict[str, Dict] = {}
         for row in rows:
             bank = row.bank_name or "Desconocido"
@@ -278,7 +283,7 @@ class ReconciliationBatchRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def create(self, template_upload_id: int, total_results: int) -> ReconciliationBatch:
+    def create(self, template_upload_id: int, total_results: int = 0) -> ReconciliationBatch:
         batch = ReconciliationBatch(
             template_upload_id=template_upload_id,
             total_results=total_results,
@@ -288,11 +293,24 @@ class ReconciliationBatchRepository:
         self.db.refresh(batch)
         return batch
 
+    def update_total(self, batch_id: int, total_results: int) -> None:
+        batch = self.db.query(ReconciliationBatch).filter(ReconciliationBatch.id == batch_id).first()
+        if batch:
+            batch.total_results = total_results
+            self.db.commit()
+
     def get_latest(self) -> Optional[ReconciliationBatch]:
         return (
             self.db.query(ReconciliationBatch)
             .order_by(ReconciliationBatch.created_at.desc())
             .first()
+        )
+
+    def get_all(self) -> List[ReconciliationBatch]:
+        return (
+            self.db.query(ReconciliationBatch)
+            .order_by(ReconciliationBatch.created_at.desc())
+            .all()
         )
 
 
@@ -317,7 +335,6 @@ class UserRepository:
         return self.db.query(User).filter(User.email == email).first()
 
     def get_by_credential(self, credential: str) -> Optional[User]:
-        """Busca por username o email."""
         return (
             self.db.query(User)
             .filter((User.username == credential) | (User.email == credential))
@@ -343,7 +360,6 @@ class UserRepository:
         return user
 
     def set_last_login(self, user: User) -> None:
-        from datetime import datetime
         user.last_login_at = datetime.utcnow()
         self.db.commit()
 
@@ -386,3 +402,360 @@ class AuditLogRepository:
             .limit(limit)
             .all()
         )
+
+
+# ---------------------------------------------------------------------------
+# Company Repository
+# ---------------------------------------------------------------------------
+
+class CompanyRepository:
+    def __init__(self, db: Session):
+        self.db = db
+
+    def create(self, name: str, tax_id: Optional[str] = None, address: Optional[str] = None) -> Company:
+        company = Company(name=name, tax_id=tax_id, address=address)
+        self.db.add(company)
+        self.db.commit()
+        self.db.refresh(company)
+        return company
+
+    def get_by_id(self, company_id: int) -> Optional[Company]:
+        return self.db.query(Company).filter(Company.id == company_id).first()
+
+    def get_all(self) -> List[Company]:
+        return self.db.query(Company).filter(Company.is_active == True).all()
+
+
+# ---------------------------------------------------------------------------
+# FiscalPeriod Repository
+# ---------------------------------------------------------------------------
+
+class FiscalPeriodRepository:
+    def __init__(self, db: Session):
+        self.db = db
+
+    def create(self, data: dict) -> FiscalPeriod:
+        period = FiscalPeriod(**data)
+        self.db.add(period)
+        self.db.commit()
+        self.db.refresh(period)
+        return period
+
+    def get_by_id(self, period_id: int) -> Optional[FiscalPeriod]:
+        return self.db.query(FiscalPeriod).filter(FiscalPeriod.id == period_id).first()
+
+    def get_all(self, company_id: Optional[int] = None) -> List[FiscalPeriod]:
+        q = self.db.query(FiscalPeriod)
+        if company_id:
+            q = q.filter(FiscalPeriod.company_id == company_id)
+        return q.order_by(FiscalPeriod.year.desc(), FiscalPeriod.month.desc()).all()
+
+    def get_open(self, company_id: Optional[int] = None) -> List[FiscalPeriod]:
+        q = self.db.query(FiscalPeriod).filter(FiscalPeriod.status == "open")
+        if company_id:
+            q = q.filter(FiscalPeriod.company_id == company_id)
+        return q.all()
+
+    def close_period(self, period_id: int) -> Optional[FiscalPeriod]:
+        period = self.get_by_id(period_id)
+        if period:
+            period.status = "closed"
+            self.db.commit()
+        return period
+
+
+# ---------------------------------------------------------------------------
+# CostCenter Repository
+# ---------------------------------------------------------------------------
+
+class CostCenterRepository:
+    def __init__(self, db: Session):
+        self.db = db
+
+    def create(self, data: dict) -> CostCenter:
+        cc = CostCenter(**data)
+        self.db.add(cc)
+        self.db.commit()
+        self.db.refresh(cc)
+        return cc
+
+    def get_by_id(self, cc_id: int) -> Optional[CostCenter]:
+        return self.db.query(CostCenter).filter(CostCenter.id == cc_id).first()
+
+    def get_all(self, company_id: Optional[int] = None) -> List[CostCenter]:
+        q = self.db.query(CostCenter).filter(CostCenter.is_active == True)
+        if company_id:
+            q = q.filter(CostCenter.company_id == company_id)
+        return q.order_by(CostCenter.code).all()
+
+
+# ---------------------------------------------------------------------------
+# ChartOfAccount Repository
+# ---------------------------------------------------------------------------
+
+class ChartOfAccountRepository:
+    def __init__(self, db: Session):
+        self.db = db
+
+    def create(self, data: dict) -> ChartOfAccount:
+        account = ChartOfAccount(**data)
+        self.db.add(account)
+        self.db.commit()
+        self.db.refresh(account)
+        return account
+
+    def get_by_id(self, account_id: int) -> Optional[ChartOfAccount]:
+        return self.db.query(ChartOfAccount).filter(ChartOfAccount.id == account_id).first()
+
+    def get_by_code(self, code: str, company_id: Optional[int] = None) -> Optional[ChartOfAccount]:
+        q = self.db.query(ChartOfAccount).filter(ChartOfAccount.code == code)
+        if company_id:
+            q = q.filter(ChartOfAccount.company_id == company_id)
+        return q.first()
+
+    def get_all(self, company_id: Optional[int] = None) -> List[ChartOfAccount]:
+        q = self.db.query(ChartOfAccount).filter(ChartOfAccount.is_active == True)
+        if company_id:
+            q = q.filter(ChartOfAccount.company_id == company_id)
+        return q.order_by(ChartOfAccount.code).all()
+
+    def get_roots(self, company_id: Optional[int] = None) -> List[ChartOfAccount]:
+        """Cuentas sin padre (nivel raíz)."""
+        q = self.db.query(ChartOfAccount).filter(
+            ChartOfAccount.parent_id.is_(None),
+            ChartOfAccount.is_active == True,
+        )
+        if company_id:
+            q = q.filter(ChartOfAccount.company_id == company_id)
+        return q.order_by(ChartOfAccount.code).all()
+
+
+# ---------------------------------------------------------------------------
+# JournalEntry Repository
+# ---------------------------------------------------------------------------
+
+class JournalEntryRepository:
+    def __init__(self, db: Session):
+        self.db = db
+
+    def create(self, entry_data: dict, lines_data: List[dict]) -> JournalEntry:
+        entry = JournalEntry(**entry_data)
+        self.db.add(entry)
+        self.db.flush()  # get entry.id before commit
+        for line_data in lines_data:
+            line = JournalEntryLine(entry_id=entry.id, **line_data)
+            self.db.add(line)
+        self.db.commit()
+        self.db.refresh(entry)
+        return entry
+
+    def get_by_id(self, entry_id: int) -> Optional[JournalEntry]:
+        return self.db.query(JournalEntry).filter(JournalEntry.id == entry_id).first()
+
+    def get_all(
+        self,
+        company_id: Optional[int] = None,
+        fiscal_period_id: Optional[int] = None,
+        status: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> Tuple[List[JournalEntry], int]:
+        q = self.db.query(JournalEntry)
+        if company_id:
+            q = q.filter(JournalEntry.company_id == company_id)
+        if fiscal_period_id:
+            q = q.filter(JournalEntry.fiscal_period_id == fiscal_period_id)
+        if status:
+            q = q.filter(JournalEntry.status == status)
+        total = q.count()
+        items = q.order_by(JournalEntry.entry_date.desc(), JournalEntry.id.desc()).offset(offset).limit(limit).all()
+        return items, total
+
+    def get_lines_for_account(
+        self,
+        account_id: int,
+        fiscal_period_id: Optional[int] = None,
+        status: str = "posted",
+    ) -> List[JournalEntryLine]:
+        q = (
+            self.db.query(JournalEntryLine)
+            .join(JournalEntry, JournalEntryLine.entry_id == JournalEntry.id)
+            .filter(
+                JournalEntryLine.account_id == account_id,
+                JournalEntry.status == status,
+            )
+        )
+        if fiscal_period_id:
+            q = q.filter(JournalEntry.fiscal_period_id == fiscal_period_id)
+        return q.order_by(JournalEntry.entry_date, JournalEntry.id).all()
+
+    def get_trial_balance(
+        self,
+        company_id: Optional[int] = None,
+        fiscal_period_id: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Suma débitos y créditos por cuenta para el balance de comprobación."""
+        q = (
+            self.db.query(
+                ChartOfAccount.id.label("account_id"),
+                ChartOfAccount.code.label("account_code"),
+                ChartOfAccount.name.label("account_name"),
+                ChartOfAccount.account_type.label("account_type"),
+                func.coalesce(func.sum(JournalEntryLine.debit), 0).label("total_debit"),
+                func.coalesce(func.sum(JournalEntryLine.credit), 0).label("total_credit"),
+            )
+            .join(JournalEntryLine, JournalEntryLine.account_id == ChartOfAccount.id)
+            .join(JournalEntry, JournalEntry.id == JournalEntryLine.entry_id)
+            .filter(JournalEntry.status == "posted")
+        )
+        if company_id:
+            q = q.filter(JournalEntry.company_id == company_id)
+        if fiscal_period_id:
+            q = q.filter(JournalEntry.fiscal_period_id == fiscal_period_id)
+        rows = q.group_by(
+            ChartOfAccount.id, ChartOfAccount.code, ChartOfAccount.name, ChartOfAccount.account_type
+        ).order_by(ChartOfAccount.code).all()
+
+        result = []
+        for row in rows:
+            net = float(row.total_debit) - float(row.total_credit)
+            result.append({
+                "account_id": row.account_id,
+                "account_code": row.account_code,
+                "account_name": row.account_name,
+                "account_type": row.account_type,
+                "total_debit": float(row.total_debit),
+                "total_credit": float(row.total_credit),
+                "net_balance": net,
+            })
+        return result
+
+
+# ---------------------------------------------------------------------------
+# Budget Repository
+# ---------------------------------------------------------------------------
+
+class BudgetRepository:
+    def __init__(self, db: Session):
+        self.db = db
+
+    def create(self, budget_data: dict, lines_data: List[dict]) -> Budget:
+        budget = Budget(**budget_data)
+        self.db.add(budget)
+        self.db.flush()
+        for line_data in lines_data:
+            line = BudgetLine(budget_id=budget.id, **line_data)
+            self.db.add(line)
+        self.db.commit()
+        self.db.refresh(budget)
+        return budget
+
+    def get_by_id(self, budget_id: int) -> Optional[Budget]:
+        return self.db.query(Budget).filter(Budget.id == budget_id).first()
+
+    def get_all(self, company_id: Optional[int] = None) -> List[Budget]:
+        q = self.db.query(Budget)
+        if company_id:
+            q = q.filter(Budget.company_id == company_id)
+        return q.order_by(Budget.created_at.desc()).all()
+
+    def approve(self, budget_id: int, approved_by_id: int) -> Optional[Budget]:
+        budget = self.get_by_id(budget_id)
+        if budget:
+            budget.status = "approved"
+            budget.approved_by_id = approved_by_id
+            budget.approved_at = datetime.utcnow()
+            self.db.commit()
+            self.db.refresh(budget)
+        return budget
+
+    def get_executed_amount(self, budget_id: int, account_id: int) -> float:
+        """Calcula el monto ejecutado para una línea presupuestaria."""
+        budget = self.get_by_id(budget_id)
+        if not budget:
+            return 0.0
+        row = (
+            self.db.query(func.coalesce(func.sum(JournalEntryLine.debit), 0))
+            .join(JournalEntry, JournalEntryLine.entry_id == JournalEntry.id)
+            .filter(
+                JournalEntryLine.account_id == account_id,
+                JournalEntry.fiscal_period_id == budget.fiscal_period_id,
+                JournalEntry.status == "posted",
+            )
+            .scalar()
+        )
+        return float(row or 0)
+
+
+# ---------------------------------------------------------------------------
+# Invoice Repository
+# ---------------------------------------------------------------------------
+
+class InvoiceRepository:
+    def __init__(self, db: Session):
+        self.db = db
+
+    def create(self, invoice_data: dict, lines_data: List[dict]) -> Invoice:
+        invoice = Invoice(**invoice_data)
+        self.db.add(invoice)
+        self.db.flush()
+        for line_data in lines_data:
+            line = InvoiceLine(invoice_id=invoice.id, **line_data)
+            self.db.add(line)
+        self.db.commit()
+        self.db.refresh(invoice)
+        return invoice
+
+    def get_by_id(self, invoice_id: int) -> Optional[Invoice]:
+        return self.db.query(Invoice).filter(Invoice.id == invoice_id).first()
+
+    def get_all(
+        self,
+        company_id: Optional[int] = None,
+        invoice_type: Optional[str] = None,
+        status: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> Tuple[List[Invoice], int]:
+        q = self.db.query(Invoice)
+        if company_id:
+            q = q.filter(Invoice.company_id == company_id)
+        if invoice_type:
+            q = q.filter(Invoice.invoice_type == invoice_type)
+        if status:
+            q = q.filter(Invoice.status == status)
+        total = q.count()
+        items = q.order_by(Invoice.invoice_date.desc()).offset(offset).limit(limit).all()
+        return items, total
+
+    def update_status(self, invoice_id: int, status: str) -> Optional[Invoice]:
+        invoice = self.get_by_id(invoice_id)
+        if invoice:
+            invoice.status = status
+            self.db.commit()
+            self.db.refresh(invoice)
+        return invoice
+
+    def add_payment(self, invoice_id: int, payment_data: dict) -> Payment:
+        payment = Payment(invoice_id=invoice_id, **payment_data)
+        self.db.add(payment)
+        self.db.commit()
+        self.db.refresh(payment)
+        return payment
+
+    def get_total_paid(self, invoice_id: int) -> float:
+        result = (
+            self.db.query(func.coalesce(func.sum(Payment.amount), 0))
+            .filter(Payment.invoice_id == invoice_id)
+            .scalar()
+        )
+        return float(result or 0)
+
+    def get_overdue(self, as_of: datetime, company_id: Optional[int] = None) -> List[Invoice]:
+        q = self.db.query(Invoice).filter(
+            Invoice.due_date < as_of,
+            Invoice.status.in_(["issued", "overdue"]),
+        )
+        if company_id:
+            q = q.filter(Invoice.company_id == company_id)
+        return q.all()

@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   LayoutDashboard, Upload, History, CheckSquare,
   AlertTriangle, Download, Users, LogOut, ShieldCheck,
+  BookOpen, PieChart, FileText, BarChart3,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth, hasRole } from "@/lib/auth";
@@ -18,13 +19,20 @@ interface NavItem {
 }
 
 const NAV: NavItem[] = [
-  { label: "Dashboard",       href: "/",                icon: LayoutDashboard, roles: ["admin", "operator", "viewer"] },
-  { label: "Cargar Archivos", href: "/uploads",         icon: Upload,          roles: ["admin", "operator"] },
-  { label: "Historial",       href: "/history",         icon: History,         roles: ["admin", "operator", "viewer"] },
-  { label: "Conciliación",    href: "/reconciliation",  icon: CheckSquare,     roles: ["admin", "operator"] },
-  { label: "Inconsistencias", href: "/inconsistencies", icon: AlertTriangle,   roles: ["admin", "operator", "viewer"] },
-  { label: "Reportes",        href: "/reports",         icon: Download,        roles: ["admin", "operator", "viewer"] },
-  { label: "Usuarios",        href: "/users",           icon: Users,           roles: ["admin"] },
+  // Inicio
+  { label: "Dashboard",        href: "/",                icon: LayoutDashboard, roles: ["admin", "operator", "viewer"] },
+  // Conciliación
+  { label: "Cargar Archivos",  href: "/uploads",         icon: Upload,          roles: ["admin", "operator"] },
+  { label: "Historial",        href: "/history",         icon: History,         roles: ["admin", "operator", "viewer"] },
+  { label: "Conciliación",     href: "/reconciliation",  icon: CheckSquare,     roles: ["admin", "operator"] },
+  { label: "Inconsistencias",  href: "/inconsistencies", icon: AlertTriangle,   roles: ["admin", "operator", "viewer"] },
+  // Contabilidad y finanzas
+  { label: "Contabilidad",     href: "/accounting",      icon: BookOpen,        roles: ["admin", "operator", "viewer"] },
+  { label: "Presupuestos",     href: "/budgets",         icon: PieChart,        roles: ["admin", "operator", "viewer"] },
+  { label: "Facturas",         href: "/invoices",        icon: FileText,        roles: ["admin", "operator", "viewer"] },
+  { label: "Reportes",         href: "/reports",         icon: BarChart3,       roles: ["admin", "operator", "viewer"] },
+  // Admin
+  { label: "Usuarios",         href: "/users",           icon: Users,           roles: ["admin"] },
 ];
 
 const ROLE_LABEL: Record<UserRole, string> = {

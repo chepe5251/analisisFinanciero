@@ -7,10 +7,37 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.core.database import create_tables, SessionLocal
+from app.core.database import SessionLocal
 from app.api import api_router
 
 logger = logging.getLogger(__name__)
+
+
+def _run_migrations() -> None:
+    """
+    Ejecuta las migraciones de Alembic al arrancar.
+    Reemplaza el create_all() directo para usar migraciones versionadas.
+    En desarrollo sin alembic configurado, hace fallback a create_all().
+    """
+    try:
+        from alembic.config import Config
+        from alembic import command
+        import os
+
+        alembic_cfg = Config("alembic.ini")
+        # Asegurar que DATABASE_URL del entorno se pase a Alembic
+        db_url = settings.DATABASE_URL
+        alembic_cfg.set_main_option("sqlalchemy.url", db_url)
+        command.upgrade(alembic_cfg, "head")
+        logger.info("Migraciones Alembic aplicadas exitosamente.")
+    except Exception as exc:
+        logger.warning(
+            "No se pudieron aplicar migraciones Alembic (%s). "
+            "Usando create_all() como fallback.",
+            exc,
+        )
+        from app.core.database import create_tables
+        create_tables()
 
 
 def _seed_admin() -> None:
@@ -48,16 +75,19 @@ def _seed_admin() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Crea las tablas y el usuario admin inicial al arrancar."""
-    create_tables()
+    """Ejecuta migraciones y crea el usuario admin inicial al arrancar."""
+    _run_migrations()
     _seed_admin()
     yield
 
 
 app = FastAPI(
-    title="Financial Reconciliation API",
-    description="API para conciliación financiera de pagos de personal",
-    version="1.0.0",
+    title="ReconcilaApp — Financial Management API",
+    description=(
+        "Sistema de contabilidad y gestión financiera empresarial. "
+        "Incluye conciliación de nóminas, contabilidad general, presupuestos y facturación."
+    ),
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -74,7 +104,11 @@ app.include_router(api_router, prefix="/api")
 
 @app.get("/", tags=["health"])
 def root():
-    return {"message": "Financial Reconciliation API", "version": "1.0.0"}
+    return {
+        "message": "ReconcilaApp Financial Management API",
+        "version": "2.0.0",
+        "docs": "/docs",
+    }
 
 
 @app.get("/health", tags=["health"])

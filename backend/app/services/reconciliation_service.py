@@ -8,14 +8,9 @@ Lógica de matching (en orden de prioridad):
   4. Empleados sin match  →  missing
   5. Transacciones sin match  →  extra
   6. Más de una transacción para la misma cuenta en el mismo archivo  →  duplicate
-
-Supuestos:
-  - La plantilla es la fuente de verdad.
-  - Un empleado puede tener solo un pago esperado por corrida.
-  - Si hay diferencia de monto ≤ AMOUNT_TOLERANCE se considera 'matched'.
-  - La detección de duplicados es dentro del mismo archivo bancario.
 """
 import logging
+import re
 from typing import List, Dict, Set, Tuple, Optional
 from collections import defaultdict
 
@@ -73,10 +68,6 @@ class ReconciliationService:
     def process_employee_template(
         self, upload_id: int, file_path: str
     ) -> Tuple[List[EmployeeTemplate], ProcessingStats]:
-        """
-        Lee, valida y persiste la plantilla de personal.
-        Retorna (registros guardados, estadísticas de procesamiento).
-        """
         df = self._read_file(file_path)
         stats = ProcessingStats()
         stats.total = len(df)
@@ -130,10 +121,6 @@ class ReconciliationService:
     def process_bank_transactions(
         self, upload_id: int, file_path: str, bank_name: str
     ) -> Tuple[List[BankTransaction], ProcessingStats]:
-        """
-        Lee, valida y persiste transacciones bancarias.
-        Retorna (registros guardados, estadísticas de procesamiento).
-        """
         df = self._read_file(file_path)
         stats = ProcessingStats()
         stats.total = len(df)
@@ -211,8 +198,10 @@ class ReconciliationService:
     def run_reconciliation(self, request: ReconciliationRunRequest) -> "ReconciliationRunResult":
         """
         Ejecuta la conciliación completa.
-        Limpia los resultados anteriores antes de cada corrida.
-        Retorna (summary, batch_id).
+
+        BUG FIX: en lugar de delete_all() (que borraba todo el historial),
+        se crea un nuevo batch_id y cada resultado se asocia a él.
+        El historial de corridas anteriores se preserva.
         """
         templates = self.template_repo.get_by_upload_id(request.template_upload_id)
         if not templates:
@@ -239,22 +228,23 @@ class ReconciliationService:
                 "Verifica que los reportes bancarios hayan sido procesados."
             )
 
-        # Limpiar corrida anterior
-        self.result_repo.delete_all()
-
-        # Ejecutar algoritmo
-        results = self._perform_reconciliation(templates, transactions)
-
-        # Persistir
-        self.result_repo.create_batch(results)
-
-        # Registrar batch
+        # BUG FIX: crear batch PRIMERO para obtener batch_id
         batch = self.batch_repo.create(
             template_upload_id=request.template_upload_id,
-            total_results=len(results),
+            total_results=0,
         )
 
-        summary_data = self.result_repo.get_summary()
+        # Ejecutar algoritmo, asociando resultados al batch
+        results = self._perform_reconciliation(templates, transactions, batch_id=batch.id)
+
+        # Persistir resultados
+        self.result_repo.create_batch(results)
+
+        # Actualizar total en el batch
+        self.batch_repo.update_total(batch.id, len(results))
+
+        # El summary filtra SOLO por este batch
+        summary_data = self.result_repo.get_summary(batch_id=batch.id)
         summary = ReconciliationSummary(**summary_data)
 
         logger.info(
@@ -272,18 +262,14 @@ class ReconciliationService:
         self,
         templates: List[EmployeeTemplate],
         transactions: List[BankTransaction],
+        batch_id: int = 0,
     ) -> List[ReconciliationResultCreate]:
         """
         Algoritmo de conciliación en 3 pasadas + detección de duplicados.
-
-        Pasada 1: match por número de cuenta + mismo banco
-        Pasada 2: match por employee_id en campo reference
-        Pasada 3: match por similitud de nombre + mismo banco
-        Post:     missing, extra, duplicados
+        Todos los resultados se asocian al batch_id provisto.
         """
         results: List[ReconciliationResultCreate] = []
 
-        # Índices para búsqueda eficiente (O(1) en lugar de O(n) en cada iteración)
         by_account: Dict[Tuple[str, str], EmployeeTemplate] = {
             (t.account_number.strip(), t.bank_name.lower().strip()): t
             for t in templates
@@ -295,7 +281,7 @@ class ReconciliationService:
         matched_template_ids: Set[int] = set()
         matched_transaction_ids: Set[int] = set()
 
-        # ----- Pasada 1: cuenta + banco (más confiable) -----
+        # ----- Pasada 1: cuenta + banco -----
         for tx in transactions:
             if not tx.beneficiary_account:
                 continue
@@ -303,7 +289,7 @@ class ReconciliationService:
             template = by_account.get(key)
             if template and template.id not in matched_template_ids:
                 status, diff = self._compare_amounts(template.expected_amount, tx.amount)
-                results.append(self._build_result(template, tx, status, diff, "account"))
+                results.append(self._build_result(template, tx, status, diff, "account", batch_id))
                 matched_template_ids.add(template.id)
                 matched_transaction_ids.add(tx.id)
 
@@ -314,7 +300,7 @@ class ReconciliationService:
             template = self._find_template_by_reference(tx.reference, by_employee_id, tx.bank_name)
             if template and template.id not in matched_template_ids:
                 status, diff = self._compare_amounts(template.expected_amount, tx.amount)
-                results.append(self._build_result(template, tx, status, diff, "employee_id_in_reference"))
+                results.append(self._build_result(template, tx, status, diff, "employee_id_in_reference", batch_id))
                 matched_template_ids.add(template.id)
                 matched_transaction_ids.add(tx.id)
 
@@ -326,7 +312,7 @@ class ReconciliationService:
             best_tx, best_score = self._find_best_name_match(template, unmatched_transactions)
             if best_tx is not None and best_score >= settings.NAME_SIMILARITY_THRESHOLD:
                 status, diff = self._compare_amounts(template.expected_amount, best_tx.amount)
-                results.append(self._build_result(template, best_tx, status, diff, f"name_similarity({best_score:.0%})"))
+                results.append(self._build_result(template, best_tx, status, diff, f"name_similarity({best_score:.0%})", batch_id))
                 matched_template_ids.add(template.id)
                 matched_transaction_ids.add(best_tx.id)
                 unmatched_transactions = [tx for tx in unmatched_transactions if tx.id != best_tx.id]
@@ -335,6 +321,7 @@ class ReconciliationService:
         for template in templates:
             if template.id not in matched_template_ids:
                 results.append(ReconciliationResultCreate(
+                    batch_id=batch_id,
                     employee_template_id=template.id,
                     reconciliation_status="missing",
                     expected_amount=template.expected_amount,
@@ -348,6 +335,7 @@ class ReconciliationService:
         for tx in transactions:
             if tx.id not in matched_transaction_ids:
                 results.append(ReconciliationResultCreate(
+                    batch_id=batch_id,
                     bank_transaction_id=tx.id,
                     reconciliation_status="extra",
                     reported_amount=tx.amount,
@@ -360,7 +348,7 @@ class ReconciliationService:
                     account_number=tx.beneficiary_account,
                 ))
 
-        # ----- Duplicados: misma cuenta, múltiples transacciones mismo archivo -----
+        # ----- Duplicados -----
         results = self._flag_duplicates(results, transactions)
 
         return results
@@ -370,7 +358,6 @@ class ReconciliationService:
     # ------------------------------------------------------------------
 
     def _compare_amounts(self, expected: float, reported: float) -> Tuple[str, float]:
-        """Clasifica si hay diferencia de monto dentro de la tolerancia configurada."""
         diff = round(reported - expected, 4)
         if abs(diff) <= settings.AMOUNT_TOLERANCE:
             return "matched", 0.0
@@ -383,6 +370,7 @@ class ReconciliationService:
         status: str,
         diff: float,
         matched_by: str,
+        batch_id: int = 0,
     ) -> ReconciliationResultCreate:
         note = None
         if status == "difference":
@@ -393,6 +381,7 @@ class ReconciliationService:
                 f"Diferencia: {sign}{diff:,.2f}"
             )
         return ReconciliationResultCreate(
+            batch_id=batch_id,
             employee_template_id=template.id,
             bank_transaction_id=tx.id,
             reconciliation_status=status,
@@ -412,9 +401,17 @@ class ReconciliationService:
         by_employee_id: Dict[str, EmployeeTemplate],
         bank_name: str,
     ) -> Optional[EmployeeTemplate]:
-        """Busca un employee_id embebido en el campo reference."""
+        """
+        Busca un employee_id embebido en el campo reference.
+
+        BUG FIX: reemplaza `emp_id in reference` (substring frágil que matchea
+        "1" en "REF-100") por búsqueda de token completo con regex word boundary.
+        """
         for emp_id, template in by_employee_id.items():
-            if emp_id in reference and template.bank_name.lower() == bank_name.lower():
+            if (
+                re.search(r'\b' + re.escape(emp_id) + r'\b', reference)
+                and template.bank_name.lower() == bank_name.lower()
+            ):
                 return template
         return None
 
@@ -423,10 +420,6 @@ class ReconciliationService:
         template: EmployeeTemplate,
         candidates: List[BankTransaction],
     ) -> Tuple[Optional[BankTransaction], float]:
-        """
-        Retorna la transacción con mayor similitud de nombre para el template dado.
-        Solo considera transacciones del mismo banco.
-        """
         best_tx: Optional[BankTransaction] = None
         best_score = 0.0
         for tx in candidates:
@@ -443,12 +436,6 @@ class ReconciliationService:
         results: List[ReconciliationResultCreate],
         transactions: List[BankTransaction],
     ) -> List[ReconciliationResultCreate]:
-        """
-        Detecta transacciones duplicadas: misma cuenta + mismo upload_id.
-        Cambia su estado a 'duplicate' para que el operador las revise.
-        Supuesto: un mismo empleado no debe recibir dos pagos en el mismo archivo.
-        """
-        # Agrupar IDs de transacción por (upload_id, account)
         account_groups: Dict[Tuple[int, str], List[int]] = defaultdict(list)
         for tx in transactions:
             if tx.beneficiary_account:

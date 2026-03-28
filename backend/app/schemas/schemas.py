@@ -2,7 +2,7 @@
 Schemas Pydantic para validación de entrada/salida de la API.
 Separados de los modelos SQLAlchemy para no acoplar la capa HTTP al ORM.
 """
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional, List, Any, Dict
 from datetime import datetime
 
@@ -102,6 +102,7 @@ class BankTransactionOut(BaseModel):
 # ---------------------------------------------------------------------------
 
 class ReconciliationResultCreate(BaseModel):
+    batch_id: Optional[int] = None          # BUG FIX: asociar al batch para historial
     employee_template_id: Optional[int] = None
     bank_transaction_id: Optional[int] = None
     reconciliation_status: str
@@ -118,6 +119,7 @@ class ReconciliationResultCreate(BaseModel):
 
 class ReconciliationResultOut(BaseModel):
     id: int
+    batch_id: Optional[int] = None
     employee_template_id: Optional[int] = None
     bank_transaction_id: Optional[int] = None
     reconciliation_status: str
@@ -139,8 +141,7 @@ class ReconciliationResultOut(BaseModel):
 # ---------------------------------------------------------------------------
 
 class ReconciliationFilters(BaseModel):
-    """Parámetros de filtrado para la vista de resultados e inconsistencias."""
-    status: Optional[str] = None           # matched|difference|missing|extra|duplicate|pending
+    status: Optional[str] = None
     bank_name: Optional[str] = None
     employee_name: Optional[str] = None
     min_amount: Optional[float] = None
@@ -152,7 +153,6 @@ class ReconciliationFilters(BaseModel):
 
 
 class PaginatedResults(BaseModel):
-    """Respuesta paginada genérica."""
     items: List[ReconciliationResultOut]
     total: int
     page: int
@@ -165,7 +165,6 @@ class PaginatedResults(BaseModel):
 # ---------------------------------------------------------------------------
 
 class ReconciliationSummary(BaseModel):
-    """KPIs del dashboard."""
     total_processed: int = 0
     total_matched: int = 0
     total_difference: int = 0
@@ -180,7 +179,6 @@ class ReconciliationSummary(BaseModel):
 
 
 class BankSummary(BaseModel):
-    """Resumen por banco para el dashboard."""
     bank_name: str
     total_transactions: int
     total_amount: float
@@ -192,19 +190,16 @@ class BankSummary(BaseModel):
 
 
 class ReconciliationRunRequest(BaseModel):
-    """Body para POST /reconciliation/run."""
     template_upload_id: int
     bank_upload_ids: List[int]
 
 
 class ReconciliationRunResult(BaseModel):
-    """Resultado interno del servicio de conciliación (no expuesto directamente como HTTP response)."""
     summary: ReconciliationSummary
     batch_id: int
 
 
 class ReconciliationRunResponse(BaseModel):
-    """Respuesta HTTP de POST /reconciliation/run."""
     summary: ReconciliationSummary
     message: str
     batch_id: Optional[int] = None
@@ -235,7 +230,7 @@ class UserUpdate(BaseModel):
     email: Optional[str] = None
     full_name: Optional[str] = None
     role: Optional[str] = None
-    password: Optional[str] = None      # None = no cambiar la contraseña
+    password: Optional[str] = None
 
 
 class UserOut(BaseModel):
@@ -252,7 +247,6 @@ class UserOut(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    """Acepta username o email en el campo 'credential'."""
     credential: str     # username o email
     password: str
 
@@ -261,6 +255,12 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserOut
+
+
+class PermissionInfo(BaseModel):
+    resource: str
+    action: str
+    allowed: bool
 
 
 # ---------------------------------------------------------------------------
@@ -279,3 +279,437 @@ class AuditLogOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Company schemas
+# ---------------------------------------------------------------------------
+
+class CompanyCreate(BaseModel):
+    name: str
+    tax_id: Optional[str] = None
+    address: Optional[str] = None
+
+
+class CompanyOut(BaseModel):
+    id: int
+    name: str
+    tax_id: Optional[str] = None
+    address: Optional[str] = None
+    is_active: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# FiscalPeriod schemas
+# ---------------------------------------------------------------------------
+
+class FiscalPeriodCreate(BaseModel):
+    company_id: Optional[int] = None
+    year: int
+    month: int
+    name: str
+    start_date: datetime
+    end_date: datetime
+
+
+class FiscalPeriodOut(BaseModel):
+    id: int
+    company_id: Optional[int] = None
+    year: int
+    month: int
+    name: str
+    start_date: datetime
+    end_date: datetime
+    status: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# CostCenter schemas
+# ---------------------------------------------------------------------------
+
+class CostCenterCreate(BaseModel):
+    company_id: Optional[int] = None
+    code: str
+    name: str
+    description: Optional[str] = None
+
+
+class CostCenterOut(BaseModel):
+    id: int
+    company_id: Optional[int] = None
+    code: str
+    name: str
+    description: Optional[str] = None
+    is_active: bool
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# ChartOfAccount schemas
+# ---------------------------------------------------------------------------
+
+VALID_ACCOUNT_TYPES = {"asset", "liability", "equity", "income", "expense"}
+
+
+class ChartOfAccountCreate(BaseModel):
+    company_id: Optional[int] = None
+    code: str
+    name: str
+    account_type: str
+    level: int = 1
+    parent_id: Optional[int] = None
+
+    @field_validator("account_type")
+    @classmethod
+    def validate_account_type(cls, v: str) -> str:
+        if v not in VALID_ACCOUNT_TYPES:
+            raise ValueError(f"account_type debe ser uno de: {', '.join(VALID_ACCOUNT_TYPES)}")
+        return v
+
+
+class ChartOfAccountOut(BaseModel):
+    id: int
+    company_id: Optional[int] = None
+    code: str
+    name: str
+    account_type: str
+    level: int
+    parent_id: Optional[int] = None
+    is_active: bool
+
+    model_config = {"from_attributes": True}
+
+
+class ChartOfAccountTree(ChartOfAccountOut):
+    children: List["ChartOfAccountTree"] = []
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# JournalEntry schemas
+# ---------------------------------------------------------------------------
+
+class JournalEntryLineCreate(BaseModel):
+    account_id: int
+    description: Optional[str] = None
+    debit: float = 0.0
+    credit: float = 0.0
+
+
+class JournalEntryLineOut(BaseModel):
+    id: int
+    entry_id: int
+    account_id: int
+    description: Optional[str] = None
+    debit: float
+    credit: float
+
+    model_config = {"from_attributes": True}
+
+
+class JournalEntryCreate(BaseModel):
+    company_id: Optional[int] = None
+    fiscal_period_id: int
+    cost_center_id: Optional[int] = None
+    entry_date: datetime
+    description: str
+    reference: Optional[str] = None
+    lines: List[JournalEntryLineCreate]
+
+    @field_validator("lines")
+    @classmethod
+    def validate_lines_not_empty(cls, v: List) -> List:
+        if not v:
+            raise ValueError("El asiento debe tener al menos una línea.")
+        return v
+
+
+class JournalEntryOut(BaseModel):
+    id: int
+    company_id: Optional[int] = None
+    fiscal_period_id: int
+    cost_center_id: Optional[int] = None
+    entry_date: datetime
+    description: str
+    reference: Optional[str] = None
+    status: str
+    created_by_id: Optional[int] = None
+    created_at: datetime
+    lines: List[JournalEntryLineOut] = []
+
+    model_config = {"from_attributes": True}
+
+
+class LedgerLine(BaseModel):
+    entry_id: int
+    entry_date: datetime
+    description: str
+    reference: Optional[str] = None
+    debit: float
+    credit: float
+    balance: float
+
+
+class TrialBalanceLine(BaseModel):
+    account_id: int
+    account_code: str
+    account_name: str
+    account_type: str
+    total_debit: float
+    total_credit: float
+    net_balance: float
+
+
+# ---------------------------------------------------------------------------
+# Budget schemas
+# ---------------------------------------------------------------------------
+
+class BudgetLineCreate(BaseModel):
+    account_id: int
+    planned_amount: float
+
+
+class BudgetLineOut(BaseModel):
+    id: int
+    account_id: int
+    planned_amount: float
+
+    model_config = {"from_attributes": True}
+
+
+class BudgetCreate(BaseModel):
+    company_id: Optional[int] = None
+    fiscal_period_id: int
+    cost_center_id: Optional[int] = None
+    name: str
+    lines: List[BudgetLineCreate] = []
+
+
+class BudgetOut(BaseModel):
+    id: int
+    company_id: Optional[int] = None
+    fiscal_period_id: int
+    cost_center_id: Optional[int] = None
+    name: str
+    status: str
+    created_at: datetime
+    approved_at: Optional[datetime] = None
+    lines: List[BudgetLineOut] = []
+
+    model_config = {"from_attributes": True}
+
+
+class BudgetExecutionLine(BaseModel):
+    account_id: int
+    account_code: str
+    account_name: str
+    planned_amount: float
+    executed_amount: float
+    variance: float
+    execution_pct: float
+
+
+class BudgetExecutionReport(BaseModel):
+    budget_id: int
+    budget_name: str
+    fiscal_period: str
+    status: str
+    total_planned: float
+    total_executed: float
+    total_variance: float
+    execution_pct: float
+    lines: List[BudgetExecutionLine]
+
+
+# ---------------------------------------------------------------------------
+# Invoice schemas
+# ---------------------------------------------------------------------------
+
+VALID_INVOICE_TYPES = {"issued", "received"}
+VALID_INVOICE_STATUSES = {"draft", "issued", "paid", "overdue", "voided"}
+
+
+class InvoiceLineCreate(BaseModel):
+    account_id: Optional[int] = None
+    description: str
+    quantity: float = 1.0
+    unit_price: float
+    tax_rate: float = 0.0
+
+
+class InvoiceLineOut(BaseModel):
+    id: int
+    invoice_id: int
+    account_id: Optional[int] = None
+    description: str
+    quantity: float
+    unit_price: float
+    tax_rate: float
+    subtotal: float
+    tax_amount: float
+    total: float
+
+    model_config = {"from_attributes": True}
+
+
+class InvoiceCreate(BaseModel):
+    company_id: Optional[int] = None
+    invoice_type: str
+    invoice_number: Optional[str] = None
+    invoice_date: datetime
+    due_date: Optional[datetime] = None
+    counterparty_name: str
+    counterparty_tax_id: Optional[str] = None
+    notes: Optional[str] = None
+    lines: List[InvoiceLineCreate]
+
+    @field_validator("invoice_type")
+    @classmethod
+    def validate_invoice_type(cls, v: str) -> str:
+        if v not in VALID_INVOICE_TYPES:
+            raise ValueError(f"invoice_type debe ser: {', '.join(VALID_INVOICE_TYPES)}")
+        return v
+
+
+class InvoiceOut(BaseModel):
+    id: int
+    company_id: Optional[int] = None
+    invoice_type: str
+    invoice_number: Optional[str] = None
+    invoice_date: datetime
+    due_date: Optional[datetime] = None
+    counterparty_name: str
+    counterparty_tax_id: Optional[str] = None
+    status: str
+    subtotal: float
+    tax_amount: float
+    total: float
+    notes: Optional[str] = None
+    created_at: datetime
+    lines: List[InvoiceLineOut] = []
+
+    model_config = {"from_attributes": True}
+
+
+class PaymentCreate(BaseModel):
+    payment_date: datetime
+    amount: float
+    payment_method: Optional[str] = None
+    bank_reference: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class PaymentOut(BaseModel):
+    id: int
+    invoice_id: int
+    payment_date: datetime
+    amount: float
+    payment_method: Optional[str] = None
+    bank_reference: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AgingBucket(BaseModel):
+    bucket: str                 # "current" | "1-30" | "31-60" | "61-90" | "90+"
+    count: int
+    total_amount: float
+
+
+class AgingReport(BaseModel):
+    invoice_type: str           # "issued" (CxC) | "received" (CxP)
+    as_of_date: datetime
+    buckets: List[AgingBucket]
+    total_outstanding: float
+
+
+# ---------------------------------------------------------------------------
+# Financial Reports schemas
+# ---------------------------------------------------------------------------
+
+class IncomeStatementLine(BaseModel):
+    account_code: str
+    account_name: str
+    amount: float
+    compare_amount: Optional[float] = None
+
+
+class IncomeStatementSection(BaseModel):
+    name: str
+    lines: List[IncomeStatementLine]
+    total: float
+    compare_total: Optional[float] = None
+
+
+class IncomeStatementReport(BaseModel):
+    period_name: str
+    compare_period_name: Optional[str] = None
+    revenues: IncomeStatementSection
+    expenses: IncomeStatementSection
+    net_income: float
+    compare_net_income: Optional[float] = None
+
+
+class BalanceSheetSection(BaseModel):
+    name: str
+    lines: List[IncomeStatementLine]
+    total: float
+
+
+class BalanceSheetReport(BaseModel):
+    period_name: str
+    assets_current: BalanceSheetSection
+    assets_non_current: BalanceSheetSection
+    total_assets: float
+    liabilities_current: BalanceSheetSection
+    liabilities_non_current: BalanceSheetSection
+    total_liabilities: float
+    equity: BalanceSheetSection
+    total_equity: float
+    balanced: bool               # total_assets ≈ total_liabilities + total_equity
+
+
+class CashFlowItem(BaseModel):
+    label: str
+    amount: float
+
+
+class CashFlowReport(BaseModel):
+    period_name: str
+    operating: List[CashFlowItem]
+    investing: List[CashFlowItem]
+    financing: List[CashFlowItem]
+    net_operating: float
+    net_investing: float
+    net_financing: float
+    net_change: float
+
+
+# ---------------------------------------------------------------------------
+# Dashboard KPIs
+# ---------------------------------------------------------------------------
+
+class FinancialKPIs(BaseModel):
+    period_name: str
+    current_ratio: Optional[float] = None           # activo_corriente / pasivo_corriente
+    working_capital: Optional[float] = None         # activo_corriente - pasivo_corriente
+    net_profit_margin: Optional[float] = None       # utilidad_neta / ingresos * 100
+    days_receivable: Optional[float] = None         # CxC / ventas_diarias_promedio
+    budget_execution_pct: Optional[float] = None    # % ejecución total del período activo
+    overdue_invoices_count: int = 0
+    overdue_invoices_amount: float = 0.0
+    total_revenues: float = 0.0
+    total_expenses: float = 0.0
+    net_income: float = 0.0
+    total_receivables: float = 0.0
+    total_payables: float = 0.0

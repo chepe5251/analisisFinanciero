@@ -4,14 +4,14 @@ Todas las variables de entorno se leen desde aquí.
 Supuesto: si no existe .env, se usan los valores por defecto (desarrollo local).
 """
 from pydantic_settings import BaseSettings
-from typing import List
+from typing import List, Optional
 import os
 import secrets
 
 
 class Settings(BaseSettings):
     # Base de datos
-    DATABASE_URL: str = "postgresql://user:password@localhost/reconciliation_db"
+    DATABASE_URL: str = "postgresql://reconcilaapp:change_me@localhost/reconciliation_db"
 
     # Directorio de archivos subidos
     UPLOAD_DIR: str = "uploads"
@@ -31,16 +31,25 @@ class Settings(BaseSettings):
     # Umbral de similitud de nombre (0.0 a 1.0)
     NAME_SIMILARITY_THRESHOLD: float = 0.80
 
-    # ── Autenticación ──────────────────────────────────────────────────
-    # Clave secreta para firmar los JWT. En producción, usa una clave larga y aleatoria.
+    # ── Autenticación ──────────────────────────────────────────────────────
     SECRET_KEY: str = secrets.token_hex(32)
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_HOURS: int = 8
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
-    # Credenciales del administrador por defecto (solo se crean si no hay usuarios)
+    # Credenciales del administrador por defecto
     DEFAULT_ADMIN_USERNAME: str = "admin"
     DEFAULT_ADMIN_EMAIL: str = "admin@reconcilaapp.local"
     DEFAULT_ADMIN_PASSWORD: str = "Admin1234!"
+
+    # ── Redis / Celery ─────────────────────────────────────────────────────
+    REDIS_URL: str = "redis://localhost:6379/0"
+
+    # ── Storage S3-compatible (vacío = disco local) ────────────────────────
+    S3_BUCKET: Optional[str] = None
+    S3_ENDPOINT_URL: Optional[str] = None
+    AWS_ACCESS_KEY_ID: Optional[str] = None
+    AWS_SECRET_ACCESS_KEY: Optional[str] = None
 
     class Config:
         env_file = ".env"

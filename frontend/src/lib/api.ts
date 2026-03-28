@@ -203,3 +203,181 @@ export async function fetchAuditLog(): Promise<AuditLog[]> {
   const { data } = await client.get<AuditLog[]>("/audit");
   return data;
 }
+
+// ---------------------------------------------------------------------------
+// Accounting
+// ---------------------------------------------------------------------------
+import type {
+  ChartOfAccount, JournalEntry, LedgerLine, TrialBalanceLine,
+  FiscalPeriod, Budget, BudgetExecutionReport, Invoice, FinancialKPIs,
+} from "./types";
+
+export async function fetchAccounts(companyId?: number): Promise<ChartOfAccount[]> {
+  const params = companyId ? { company_id: companyId } : {};
+  const { data } = await client.get<ChartOfAccount[]>("/accounting/accounts", { params });
+  return data;
+}
+
+export async function createAccount(payload: {
+  code: string; name: string; account_type: string; level?: number; parent_id?: number;
+}): Promise<ChartOfAccount> {
+  const { data } = await client.post<ChartOfAccount>("/accounting/accounts", payload);
+  return data;
+}
+
+export async function fetchJournalEntries(params: {
+  fiscal_period_id?: number; status?: string; page?: number; page_size?: number;
+}): Promise<{ items: JournalEntry[]; total: number; total_pages: number }> {
+  const { data } = await client.get("/accounting/entries", { params });
+  return data;
+}
+
+export async function createJournalEntry(payload: {
+  fiscal_period_id: number;
+  entry_date: string;
+  description: string;
+  reference?: string;
+  lines: { account_id: number; debit: number; credit: number; description?: string }[];
+}): Promise<JournalEntry> {
+  const { data } = await client.post<JournalEntry>("/accounting/entries", payload);
+  return data;
+}
+
+export async function postEntry(entryId: number): Promise<JournalEntry> {
+  const { data } = await client.post<JournalEntry>(`/accounting/entries/${entryId}/post`);
+  return data;
+}
+
+export async function voidEntry(entryId: number, reason: string): Promise<JournalEntry> {
+  const { data } = await client.post<JournalEntry>(`/accounting/entries/${entryId}/void`, null, {
+    params: { reason },
+  });
+  return data;
+}
+
+export async function fetchLedger(accountId: number, fiscalPeriodId?: number): Promise<{
+  account_id: number; account_code: string; account_name: string; lines: LedgerLine[]; final_balance: number;
+}> {
+  const params = fiscalPeriodId ? { fiscal_period_id: fiscalPeriodId } : {};
+  const { data } = await client.get(`/accounting/ledger/${accountId}`, { params });
+  return data;
+}
+
+export async function fetchTrialBalance(params: {
+  fiscal_period_id?: number; company_id?: number;
+}): Promise<TrialBalanceLine[]> {
+  const { data } = await client.get<TrialBalanceLine[]>("/accounting/trial-balance", { params });
+  return data;
+}
+
+export async function fetchFiscalPeriods(companyId?: number): Promise<FiscalPeriod[]> {
+  const params = companyId ? { company_id: companyId } : {};
+  const { data } = await client.get<FiscalPeriod[]>("/accounting/fiscal-periods", { params });
+  return data;
+}
+
+export async function createFiscalPeriod(payload: {
+  year: number; month: number; name: string;
+  start_date: string; end_date: string; company_id?: number;
+}): Promise<FiscalPeriod> {
+  const { data } = await client.post<FiscalPeriod>("/accounting/fiscal-periods", payload);
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Budgets
+// ---------------------------------------------------------------------------
+
+export async function fetchBudgets(companyId?: number): Promise<Budget[]> {
+  const params = companyId ? { company_id: companyId } : {};
+  const { data } = await client.get<Budget[]>("/budgets", { params });
+  return data;
+}
+
+export async function createBudget(payload: {
+  fiscal_period_id: number; name: string; cost_center_id?: number;
+  lines: { account_id: number; planned_amount: number }[];
+}): Promise<Budget> {
+  const { data } = await client.post<Budget>("/budgets", payload);
+  return data;
+}
+
+export async function fetchBudgetExecution(budgetId: number): Promise<BudgetExecutionReport> {
+  const { data } = await client.get<BudgetExecutionReport>(`/budgets/${budgetId}/execution`);
+  return data;
+}
+
+export async function approveBudget(budgetId: number): Promise<Budget> {
+  const { data } = await client.post<Budget>(`/budgets/${budgetId}/approve`);
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Invoices
+// ---------------------------------------------------------------------------
+
+export async function fetchInvoices(params: {
+  invoice_type?: string; status?: string; page?: number; page_size?: number;
+}): Promise<{ items: Invoice[]; total: number; total_pages: number }> {
+  const { data } = await client.get("/invoices", { params });
+  return data;
+}
+
+export async function createInvoice(payload: {
+  invoice_type: string;
+  invoice_date: string;
+  due_date?: string;
+  counterparty_name: string;
+  invoice_number?: string;
+  lines: { description: string; quantity: number; unit_price: number; tax_rate: number; account_id?: number }[];
+}): Promise<Invoice> {
+  const { data } = await client.post<Invoice>("/invoices", payload);
+  return data;
+}
+
+export async function issueInvoice(invoiceId: number): Promise<Invoice> {
+  const { data } = await client.post<Invoice>(`/invoices/${invoiceId}/issue`);
+  return data;
+}
+
+export async function registerPayment(invoiceId: number, payload: {
+  payment_date: string; amount: number; payment_method?: string; bank_reference?: string;
+}): Promise<{ id: number; amount: number }> {
+  const { data } = await client.post(`/invoices/${invoiceId}/payments`, payload);
+  return data;
+}
+
+export async function downloadInvoicePdf(invoiceId: number): Promise<void> {
+  const response = await client.get(`/invoices/${invoiceId}/pdf`, { responseType: "blob" });
+  const url = URL.createObjectURL(response.data);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `factura_${invoiceId}.pdf`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ---------------------------------------------------------------------------
+// Financial KPIs Dashboard
+// ---------------------------------------------------------------------------
+
+export async function fetchFinancialKPIs(params?: {
+  company_id?: number; fiscal_period_id?: number;
+}): Promise<FinancialKPIs> {
+  const { data } = await client.get<FinancialKPIs>("/dashboard/financial-kpis", { params });
+  return data;
+}
+
+export async function downloadFinancialReport(
+  endpoint: string,
+  params: Record<string, string | number>,
+  filename: string,
+): Promise<void> {
+  const response = await client.get(endpoint, { params, responseType: "blob" });
+  const url = URL.createObjectURL(response.data);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
